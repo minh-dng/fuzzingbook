@@ -45,7 +45,7 @@ dependencies = [
     # TODO: switch back to PyPI once upstream accepts the fix.
     # NOTE: plain `name@url` form: setuptools rejects a URL requirement
     # combined with `;` markers in [project] dependencies.
-    'isla-solver@git+https://github.com/minh-dng/isla.git@fix-z3-aarch64',
+    'isla-solver@git+https://github.com/minh-dng/isla.git@main',
     'lxml>=4.5.1',
     'Markdown>=3.3.4',
     'markdown>=3.4.3',

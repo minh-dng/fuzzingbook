@@ -23,7 +23,7 @@ dependencies:
   - pip:
       - markdown
       - graphviz
-      - git+https://github.com/minh-dng/isla.git@fix-z3-aarch64#egg=isla-solver
+      - git+https://github.com/minh-dng/isla.git@main#egg=isla-solver
       - networkx
       - yapf
       - autopep8

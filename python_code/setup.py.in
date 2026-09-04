@@ -28,7 +28,7 @@ setuptools.setup(
         'enforce>=0.3.4',
         'graphviz>=0.14.2',
         'ipython>=7.16.1',
-        "isla-solver@git+https://github.com/minh-dng/isla.git@fix-z3-aarch64",
+        "isla-solver@git+https://github.com/minh-dng/isla.git@main",
         'lxml>=4.5.1',
         'Markdown>=3.3.4',
         'markdown>=3.4.3',
