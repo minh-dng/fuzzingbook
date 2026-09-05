@@ -35,24 +35,29 @@ COPY utils/ ./utils/
 COPY docs/code/ ./docs_code/
 
 # Upgrade pip, then install the project (tests dependency resolution on arm64).
-# Pin setuptools==80.9.0 (last with pkg_resources): isla-solver<=1.10.1 does
-# `import pkg_resources`, removed in setuptools>=81 (fails on Python 3.12+).
-RUN pip install --no-cache-dir --upgrade pip "setuptools==80.9.0" wheel && \
+# No setuptools pin: isla no longer needs pkg_resources, so a fresh env with
+# stock setuptools (v84+, no pkg_resources) must work. Both must be present;
+# fail loudly if not (the old markers used to silently skip them on arm64).
+RUN pip install --no-cache-dir --upgrade pip wheel && \
     pip install --no-cache-dir . && \
-    pip show z3-solver isla-solver || echo "NOTE: z3/isla not installed (markers excluded arm64)"
+    pip show z3-solver isla-solver
 
 # Smoke test: z3 + isla must import and solve on linux/aarch64
 RUN python3 -c "import platform; print('machine:', platform.machine())" && \
     python3 -c "import z3; print('z3 version:', z3.get_version()); s = z3.Solver(); x = z3.Int('x'); s.add(x > 0); assert s.check() == z3.sat; print('z3 smoke: sat, model =', s.model())" && \
     python3 -c "from isla.solver import ISLaSolver; s = ISLaSolver(grammar='<start> ::= \"a\"'); print('isla smoke:', s.solve())"
 
-# Verify fuzzingbook+z3 integration with committed generated code.
-# docs_code/ is imported as a package (relative imports like `from .Coverage`
-# resolve inside it). Exercises z3-heavy chapters to catch z3 4.x->5.x breakage.
-RUN PYTHONPATH=. python3 -c "from docs_code.ConcolicFuzzer import ConcolicTracer; print('ConcolicFuzzer import ok')" && \
-    PYTHONPATH=. python3 -c "from docs_code.SymbolicFuzzer import SymbolicFuzzer; print('SymbolicFuzzer import ok')" && \
-    PYTHONPATH=. python3 -c "from docs_code.FuzzingWithConstraints import ISLaSolver; print('FuzzingWithConstraints import ok')" && \
-    PYTHONPATH=. python3 -c "from docs_code.PrototypingWithPython import *; print('PrototypingWithPython import ok')"
+# Populate the installed package with the committed generated code (the same
+# content `make code` produces, and what `make dist` ships), then reinstall,
+# so every check below exercises the INSTALLED fuzzingbook package itself.
+RUN cp docs_code/*.py python_code/ && \
+    pip install --no-cache-dir --no-deps --force-reinstall . && \
+    pip show -f fuzzingbook | grep -E "ConcolicFuzzer.py|SymbolicFuzzer.py" && \
+    python3 -c "import fuzzingbook.ConcolicFuzzer, fuzzingbook.SymbolicFuzzer, fuzzingbook.FuzzingWithConstraints, fuzzingbook.PrototypingWithPython; print('installed fuzzingbook imports ok')"
+
+# Functional checks through the installed package + new z3 + forked isla.
+RUN python3 -c "from fuzzingbook.Fuzzer import RandomFuzzer; print('RandomFuzzer:', repr(RandomFuzzer().fuzz()))" && \
+    python3 -c "from fuzzingbook.FuzzingWithConstraints import US_PHONE_GRAMMAR; from isla.solver import ISLaSolver; s = ISLaSolver(US_PHONE_GRAMMAR, max_number_free_instantiations=1, max_number_smt_instantiations=1); print('installed-package isla solve:', s.solve())"
 
 # NOTE: `CI=true make -k code` currently fails on Coverage.py (NameError: Any)
 # due to a pre-existing export bug (notebooks/Coverage.ipynb has two
