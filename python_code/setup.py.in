@@ -16,7 +16,7 @@ setuptools.setup(
     long_description_content_type="text/markdown",
     url="https://www.fuzzingbook.org/",
     packages=['fuzzingbook', 'fuzzingbook.bookutils'],
-    python_requires='>=3.9',  # Mostly for ast.unparse()
+    python_requires='>=3.10',  # Must match pyproject.toml (isla-solver needs 3.10+)
     # packages=setuptools.find_packages(),
 
     # From requirements.txt
@@ -28,6 +28,9 @@ setuptools.setup(
         'enforce>=0.3.4',
         'graphviz>=0.14.2',
         'ipython>=7.16.1',
+        # NOTE: plain `name@url` form (no `;` marker): setuptools rejects a URL
+        # requirement combined with markers, in both [project] dependencies
+        # and setup.py install_requires. python_requires>=3.10 covers it.
         "isla-solver@git+https://github.com/minh-dng/isla.git@main",
         'lxml>=4.5.1',
         'Markdown>=3.3.4',
