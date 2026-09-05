@@ -65,4 +65,9 @@ RUN python3 -c "from fuzzingbook.Fuzzer import RandomFuzzer; print('RandomFuzzer
 # discarded by export_notebook_code.py). Unrelated to z3/arm64; not fixed here.
 # RUN CI=true make -k code
 
+# Regression test for ISLa interop: importing isla.solver first must not break
+# symbolic fuzzing. isla patches z3.ExprRef.__eq__ process-wide; the chapters
+# build formulas via symbolic_eq(), immune to the patch.
+RUN python3 -c "import isla.solver; from fuzzingbook.SymbolicFuzzer import SimpleSymbolicFuzzer, check_triangle; fz = SimpleSymbolicFuzzer(check_triangle, max_iter=3); res = fz.fuzz(); assert set(res) == {'a', 'b', 'c'} and all(v is not None for v in res.values()); cls = check_triangle(*[res[k].as_long() for k in 'abc']); assert cls in {'Equilateral', 'Isosceles', 'Scalene'}; print('mixed-use symbolic fuzz ok:', res, '->', cls)"
+
 CMD ["python3", "-c", "import z3; print('fuzzingbook linux/arm64 OK, z3 =', z3.get_version())"]
