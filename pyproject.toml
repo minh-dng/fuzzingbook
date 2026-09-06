@@ -42,7 +42,6 @@ dependencies = [
     'ipython>=7.16.1',
     # ISLa from our fork (null-byte fix for z3>=4.13, linux/aarch64 wheels).
     # Upstream pins z3-solver<=4.11.2.0 (no aarch64 wheel); the fork relaxes it.
-    # TODO: switch back to PyPI once upstream accepts the fix.
     # NOTE: plain `name@url` form: setuptools rejects a URL requirement
     # combined with `;` markers in [project] dependencies.
     'isla-solver@git+https://github.com/minh-dng/isla.git@main',
