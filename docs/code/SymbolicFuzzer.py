@@ -482,20 +482,6 @@ if __name__ == '__main__':
 def to_src(astnode):
     return ast.unparse(astnode).strip()
 
-def to_z3_value(v, ctx):
-    """Coerce a Python value to a z3 expression, as stock `==` would."""
-    if isinstance(v, z3.AstRef):
-        return v
-    if isinstance(v, bool):
-        return z3.BoolVal(v, ctx)
-    if isinstance(v, int):
-        return z3.IntVal(v, ctx)
-    if isinstance(v, float):
-        return z3.RealVal(v, ctx)
-    if isinstance(v, str):
-        return z3.StringVal(v, ctx)
-    raise z3.Z3Exception("Z3 AST expected: %r" % (v,))
-
 def symbolic_eq(a, b):
     """Build a z3 equality that also works when ISLa is imported.
 
@@ -503,16 +489,21 @@ def symbolic_eq(a, b):
     structural Boolean) at import time, so plain `==` in the evaluated
     constraint strings below no longer builds formulas there (and even
     raises for operands such as missing model values, where stock z3
-    returns False). This builds exactly the formula stock z3 would.
+    returns False). This builds exactly the formula stock z3 would, by
+    reusing z3's own coercion (so BitVec, Real, string, ... operands
+    keep working) instead of recreating it.
     """
     if a is None or b is None:
         return a is None and b is None
     if not isinstance(a, z3.AstRef) and not isinstance(b, z3.AstRef):
         return a == b
-    ctx = a.ctx if isinstance(a, z3.AstRef) else b.ctx
-    a = to_z3_value(a, ctx)
-    b = to_z3_value(b, ctx)
-    return z3.BoolRef(z3.Z3_mk_eq(ctx.ref(), a.as_ast(), b.as_ast()), ctx)
+    # Private z3 API, imported lazily so the chapter still loads if it moves;
+    # verified present on all supported z3 (>= 4.13).
+    from z3.z3 import _coerce_exprs
+    a, b = _coerce_exprs(a, b)
+    holder = a if isinstance(a, z3.AstRef) else b
+    return z3.BoolRef(
+        z3.Z3_mk_eq(holder.ctx_ref(), a.as_ast(), b.as_ast()), holder.ctx)
 
 def rewrite_equality(node):
     """Rewrite `==` in a constraint AST into symbolic_eq() calls.
@@ -521,6 +512,9 @@ def rewrite_equality(node):
     solve_path_constraint); the strings produced by extract_constraints
     are left untouched, so the documented outputs do not change.
     `!=` needs no rewrite: z3 provides its own patch-immune `__ne__`.
+    Chained comparisons (including mixed ones like `a == b < c`) are
+    folded into an explicit z3.And -- a Python `and` would silently
+    drop all but one conjunct, as z3 formulas are always truthy.
     """
     for field, value in ast.iter_fields(node):
         if isinstance(value, list):
@@ -529,16 +523,27 @@ def rewrite_equality(node):
                 for item in value])
         elif isinstance(value, ast.AST):
             setattr(node, field, rewrite_equality(value))
-    if (isinstance(node, ast.Compare) and node.ops and
-            all(isinstance(op, ast.Eq) for op in node.ops)):
+    if isinstance(node, ast.Compare) and any(
+            isinstance(op, ast.Eq) for op in node.ops):
         operands = [node.left] + list(node.comparators)
-        calls = [ast.Call(func=ast.Name(id='symbolic_eq', ctx=ast.Load()),
-                          args=[operands[i], operands[i + 1]], keywords=[])
-                 for i in range(len(operands) - 1)]
-        if len(calls) == 1:
-            return ast.copy_location(calls[0], node)
+        parts = []
+        for i, op in enumerate(node.ops):
+            left, right = operands[i], operands[i + 1]
+            if isinstance(op, ast.Eq):
+                parts.append(ast.Call(
+                    func=ast.Name(id='symbolic_eq', ctx=ast.Load()),
+                    args=[left, right], keywords=[]))
+            else:
+                parts.append(ast.Compare(
+                    left=left, ops=[op], comparators=[right]))
+        if len(parts) == 1:
+            return ast.copy_location(parts[0], node)
         return ast.copy_location(
-            ast.BoolOp(op=ast.And(), values=calls), node)
+            ast.Call(func=ast.Attribute(
+                value=ast.Name(id='z3', ctx=ast.Load()),
+                attr='And', ctx=ast.Load()),
+                args=parts, keywords=[]),
+            node)
     return node
 
 if __name__ == '__main__':

@@ -70,4 +70,9 @@ RUN python3 -c "from fuzzingbook.Fuzzer import RandomFuzzer; print('RandomFuzzer
 # build formulas via symbolic_eq(), immune to the patch.
 RUN python3 -c "import isla.solver; from fuzzingbook.SymbolicFuzzer import SimpleSymbolicFuzzer, check_triangle; fz = SimpleSymbolicFuzzer(check_triangle, max_iter=3); res = fz.fuzz(); assert set(res) == {'a', 'b', 'c'} and all(v is not None for v in res.values()); cls = check_triangle(*[res[k].as_long() for k in 'abc']); assert cls in {'Equilateral', 'Isosceles', 'Scalene'}; print('mixed-use symbolic fuzz ok:', res, '->', cls)"
 
+# Unit probes for symbolic_eq: chained == must conjoin symbolically (a Python
+# `and` would silently drop conjuncts, as z3 formulas are always truthy),
+# and exotic sorts must coerce exactly like stock z3.
+RUN python3 -c "import z3; from fuzzingbook.SymbolicFuzzer import symbolic_eq, rewrite_equality, to_src, get_expression; a, b, c = z3.Ints('a b c'); assert to_src(rewrite_equality(get_expression('a == b == c'))) == 'z3.And(symbolic_eq(a, b), symbolic_eq(b, c))'; assert to_src(rewrite_equality(get_expression('a == b < c'))) == 'z3.And(symbolic_eq(a, b), b < c)'; v = z3.BitVec('v', 8); x = z3.Real('x'); assert str(symbolic_eq(v, 1)) == str(v == 1); assert str(symbolic_eq(x, '1/2')) == str(x == '1/2'); assert symbolic_eq(a, None) is False; s = z3.Solver(); s.add(symbolic_eq(a, b), symbolic_eq(b, c), a == 1, b == 1, c == 0); assert s.check() == z3.unsat; print('symbolic_eq probes ok')"
+
 CMD ["python3", "-c", "import z3; print('fuzzingbook linux/arm64 OK, z3 =', z3.get_version())"]
