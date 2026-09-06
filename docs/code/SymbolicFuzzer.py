@@ -482,6 +482,70 @@ if __name__ == '__main__':
 def to_src(astnode):
     return ast.unparse(astnode).strip()
 
+def symbolic_eq(a, b):
+    """Build a z3 equality that also works when ISLa is imported.
+
+    `isla.language` globally replaces `z3.ExprRef.__eq__` (returning a
+    structural Boolean) at import time, so plain `==` in the evaluated
+    constraint strings below no longer builds formulas there (and even
+    raises for operands such as missing model values, where stock z3
+    returns False). This builds exactly the formula stock z3 would, by
+    reusing z3's own coercion (so BitVec, Real, string, ... operands
+    keep working) instead of recreating it.
+    """
+    if a is None or b is None:
+        return a is None and b is None
+    if not isinstance(a, z3.AstRef) and not isinstance(b, z3.AstRef):
+        return a == b
+    # Private z3 API, imported lazily so the chapter still loads if it moves;
+    # verified present on all supported z3 (>= 4.13).
+    from z3.z3 import _coerce_exprs
+    a, b = _coerce_exprs(a, b)
+    holder = a if isinstance(a, z3.AstRef) else b
+    return z3.BoolRef(
+        z3.Z3_mk_eq(holder.ctx_ref(), a.as_ast(), b.as_ast()), holder.ctx)
+
+def rewrite_equality(node):
+    """Rewrite `==` in a constraint AST into symbolic_eq() calls.
+
+    Used on parsed constraint strings just before evaluating them (see
+    solve_path_constraint); the strings produced by extract_constraints
+    are left untouched, so the documented outputs do not change.
+    `!=` needs no rewrite: z3 provides its own patch-immune `__ne__`.
+    Chained comparisons (including mixed ones like `a == b < c`) are
+    folded into an explicit z3.And -- a Python `and` would silently
+    drop all but one conjunct, as z3 formulas are always truthy.
+    """
+    for field, value in ast.iter_fields(node):
+        if isinstance(value, list):
+            setattr(node, field, [
+                rewrite_equality(item) if isinstance(item, ast.AST) else item
+                for item in value])
+        elif isinstance(value, ast.AST):
+            setattr(node, field, rewrite_equality(value))
+    if isinstance(node, ast.Compare) and any(
+            isinstance(op, ast.Eq) for op in node.ops):
+        operands = [node.left] + list(node.comparators)
+        parts = []
+        for i, op in enumerate(node.ops):
+            left, right = operands[i], operands[i + 1]
+            if isinstance(op, ast.Eq):
+                parts.append(ast.Call(
+                    func=ast.Name(id='symbolic_eq', ctx=ast.Load()),
+                    args=[left, right], keywords=[]))
+            else:
+                parts.append(ast.Compare(
+                    left=left, ops=[op], comparators=[right]))
+        if len(parts) == 1:
+            return ast.copy_location(parts[0], node)
+        return ast.copy_location(
+            ast.Call(func=ast.Attribute(
+                value=ast.Name(id='z3', ctx=ast.Load()),
+                attr='And', ctx=ast.Load()),
+                args=parts, keywords=[]),
+            node)
+    return node
+
 if __name__ == '__main__':
     to_src(e)
 
@@ -887,7 +951,8 @@ class SimpleSymbolicFuzzer(SimpleSymbolicFuzzer):
 
         solutions = {}
         with checkpoint(self.z3):
-            st = 'self.z3.add(%s)' % ', '.join(constraints)
+            st = 'self.z3.add(%s)' % ', '.join(
+                to_src(rewrite_equality(get_expression(c))) for c in constraints)
             eval(st)
             if self.z3.check() != z3.sat:
                 return {}
@@ -895,7 +960,7 @@ class SimpleSymbolicFuzzer(SimpleSymbolicFuzzer):
             solutions = {d.name(): m[d] for d in m.decls()}
             my_args = {k: solutions.get(k, None) for k in self.fn_args}
         predicate = 'z3.And(%s)' % ','.join(
-            ["%s == %s" % (k, v) for k, v in my_args.items()])
+            ["symbolic_eq(%s, %s)" % (k, v) for k, v in my_args.items()])
         eval('self.z3.add(z3.Not(%s))' % predicate)
         return my_args
 
@@ -1259,7 +1324,8 @@ class SymbolicFuzzer(SymbolicFuzzer):
 
         solutions = {}
         with checkpoint(self.z3):
-            st = 'self.z3.add(%s)' % ', '.join(constraints)
+            st = 'self.z3.add(%s)' % ', '.join(
+                to_src(rewrite_equality(get_expression(c))) for c in constraints)
             eval(st)
             if self.z3.check() != z3.sat:
                 return {}
@@ -1268,7 +1334,7 @@ class SymbolicFuzzer(SymbolicFuzzer):
             my_args = {k: solutions.get(k, None) for k in self.fn_args}
 
         predicate = 'z3.And(%s)' % ','.join(
-            ["%s == %s" % (k, v) for k, v in my_args.items()])
+            ["symbolic_eq(%s, %s)" % (k, v) for k, v in my_args.items()])
         eval('self.z3.add(z3.Not(%s))' % predicate)
 
         return my_args
@@ -1604,7 +1670,9 @@ class SymbolicFuzzer(SymbolicFuzzer):
         with_types = identifiers_with_types(identifiers, self.used_variables)
         decl = define_symbolic_vars(with_types, '')
         exec(decl)
-        exec("s.add(z3.And(%s))" % ','.join(s2), globals(), locals())
+        exec("s.add(z3.And(%s))" % ','.join(
+            to_src(rewrite_equality(get_expression(c))) for c in s2),
+            globals(), locals())
         return s.check() == z3.sat
 
 ### Exercise 3: Implementing a Concolic Fuzzer
@@ -1692,7 +1760,8 @@ if __name__ == '__main__':
     exec(decl)
 
 if __name__ == '__main__':
-    eval('z3.solve(%s)' % ','.join(constraints))
+    eval('z3.solve(%s)' % ','.join(
+        to_src(rewrite_equality(get_expression(c))) for c in constraints))
 
 if __name__ == '__main__':
     acfz_roots.fuzz()
@@ -1724,7 +1793,8 @@ if __name__ == '__main__':
     new_constraints
 
 if __name__ == '__main__':
-    eval('z3.solve(%s)' % ','.join(new_constraints))
+    eval('z3.solve(%s)' % ','.join(
+        to_src(rewrite_equality(get_expression(c))) for c in new_constraints))
 
 if __name__ == '__main__':
     with ArcCoverage() as cov:
